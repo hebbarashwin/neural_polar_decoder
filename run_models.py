@@ -1,5 +1,3 @@
-__author__ = 'vivien98'
-
 import argparse
 import torch
 import torch.nn as nn
@@ -22,7 +20,7 @@ matplotlib.use('AGG')
 import matplotlib.pyplot as plt
 
 from utils import snr_db2sigma, errors_ber, errors_bitwise_ber, errors_bler, min_sum_log_sum_exp, moving_average, extract_block_errors, extract_block_nonerrors
-from models import convNet,XFormerEndToEndGPT,XFormerEndToEndDecoder,XFormerEndToEndEncoder,simpleNet,bigConvNet,smallNet,multConvNet,rnnAttn,bitConvNet
+from models import convNet,XFormerEndToEndGPT,XFormerEndToEndDecoder,XFormerEndToEndEncoder,rnnAttn
 from polar import *
 from pac_code import *
 
@@ -557,128 +555,7 @@ def test_standard(net, pac, msg_bits_all, received, run_fano = False, run_dumer 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def plot_tsne(args,net,device,focus_on_bit=1,num_samples=100,num_neighbours=5,small_net=False):
-    K = args.K
-    N = args.N
-    n = int(np.log2(N))
-    snr = args.dec_train_snr
-    rs = np.array([256 ,255 ,252 ,254 ,248 ,224 ,240 ,192 ,128 ,253 ,244 ,251 ,250 ,239 ,238 ,247 ,246 ,223 ,222 ,232 ,216 ,236 ,220 ,188 ,208 ,184 ,191 ,190 ,176 ,127 ,126 ,124 ,120 ,249 ,245 ,243 ,242 ,160 ,231 ,230 ,237 ,235 ,234 ,112 ,228 ,221 ,219 ,218 ,212 ,215 ,214 ,189 ,187 ,96 ,186 ,207 ,206 ,183 ,182 ,204 ,180 ,200 ,64 ,175 ,174 ,172 ,125 ,123 ,122 ,119 ,159 ,118 ,158 ,168 ,241 ,116 ,111 ,233 ,156 ,110 ,229 ,227 ,217 ,108 ,213 ,152 ,226 ,95 ,211 ,94 ,205 ,185 ,104 ,210 ,203 ,181 ,92 ,144 ,202 ,179 ,199 ,173 ,178 ,63 ,198 ,121 ,171 ,88 ,62 ,117 ,170 ,196 ,157 ,167 ,60 ,115 ,155 ,109 ,166 ,80 ,114 ,154 ,107 ,56 ,225 ,151 ,164 ,106 ,93 ,150 ,209 ,103 ,91 ,143 ,201 ,102 ,48 ,148 ,177 ,90 ,142 ,197 ,87 ,100 ,61 ,169 ,195 ,140 ,86 ,59 ,32 ,165 ,194 ,113 ,79 ,58 ,153 ,84 ,136 ,55 ,163 ,78 ,105 ,149 ,162 ,54 ,76 ,101 ,47 ,147 ,89 ,52 ,141 ,99 ,46 ,146 ,72 ,85 ,139 ,98 ,31 ,44 ,193 ,138 ,57 ,83 ,30 ,135 ,77 ,40 ,82 ,134 ,161 ,28 ,53 ,75 ,132 ,24 ,51 ,74 ,45 ,145 ,71 ,50 ,16 ,97 ,70 ,43 ,137 ,68 ,42 ,29 ,39 ,81 ,27 ,133 ,38 ,26 ,36 ,131 ,23 ,73 ,22 ,130 ,49 ,15 ,20 ,69 ,14 ,12 ,67 ,41 ,8 ,66 ,37 ,25 ,35 ,34 ,21 ,129 ,19 ,13 ,18 ,11 ,10 ,7 ,65 ,6 ,4 ,33 ,17 ,9 ,5 ,3 ,2 ,1 ]) - 1
-    polar = PolarCode(n, K, None, rs=rs)
-    
-    images = []
-    # for filename in filenames:
-    #     images.append(imageio.imread(filename))
-    # imageio.mimsave('/path/to/movie.gif', images)
-    all_msg_bits = []
-    for i in range(2**K):
-        d = dec2bitarray(i,K )
-        all_msg_bits.append(d)
-    all_message_bits = torch.from_numpy(np.array(all_msg_bits))
-    all_message_bits = 1 - 2*all_message_bits.float()
-    codebook = polar.encode_plotkin(all_message_bits)
-    b_codebook = codebook.repeat(1, 1, 1)
-    
-    info_inds = polar.info_positions
-    msg_bits1 = torch.ones((num_samples,K))#1 - 2 * (torch.rand(num_samples, K) < 0.5).float()
-    msg_bits2 = torch.ones((num_samples,K))
-    msg_bits2[:,focus_on_bit] = -1
-    msg_bits = torch.cat((msg_bits1,msg_bits2),0)
-    gt = torch.ones(2*num_samples, N)
-    gt[:, info_inds] = msg_bits
-    polar_code = polar.encode_plotkin(msg_bits,custom_info_positions = info_inds)
-    
-    # noisy_code = polar_code#polar.channel(polar_code, snr)#a
-    # b_noisy = noisy_code.unsqueeze(1).repeat(1, 2**K, 1)
-    # diff = -(b_noisy - b_codebook).pow(2).sum(dim=2)
-    # distList = torch.topk(diff,1024)
-    # print(torch.sum(1.0*(distList.values == -32.)))
-    # all_neighbours = b_codebook[0][distList.indices.tolist()[0][0:num_neighbours],:]
-    if small_net:
-        codes = 4*np.random.rand(num_samples,2)-2
-        samples = torch.from_numpy(codes).float()
-        x = samples[:,0]
-        y = samples[:,1]
-        num_models = int(args.model_iters/args.model_save_per)
-        model_iters_arr = [ args.model_save_per*elem for elem in list(range(num_models))]
-        model_iters_arr[0] = 1
-        for iteration in tqdm(model_iters_arr):
-            if args.previous_code == 'polar':
-                previous_save_path = './Supervised_Xformer_decoder_Polar_Results/Polar_{0}_{1}/Scheme_{2}/{3}/{4}_depth_{5}'\
-                                            .format(args.previous_K, args.previous_N, args.previous_rate_profile,  args.model, args.n_head,args.n_layers)
-            elif args.previous_code == 'pac':
-                previous_save_path = './Supervised_Xformer_decoder_PAC_Results/Polar_{0}_{1}/Scheme_{2}/{3}/{4}_depth_{5}'\
-                                            .format(args.previous_K, args.previous_N, args.previous_rate_profile,  args.model, args.n_head,args.n_layers)
-            if args.previous_id is not None:
-                previous_save_path = previous_save_path + '/' + args.previous_id
-                ID = args.previous_id
-            else:
-                previous_save_path = previous_save_path #+ '/' + ID
-                ID = 'scratch'
-            if args.run is not None:
-                previous_save_path = previous_save_path + '/' + '{0}'.format(args.run)
-            os.makedirs(previous_save_path+ '/'+'decision_boundaries/', exist_ok=True)
-            checkpoint1 = torch.load(previous_save_path +'/Models/model_{0}.pt'.format(iteration), map_location=lambda storage, loc: storage)
-            #xformer.load_state_dict(torch.load(PATH))
-            loaded_step = checkpoint1['step']
-            net.load_state_dict(checkpoint1['xformer'])
-            print("Loaded Model for {0},{1} loaded at step {2} from previous model {3},{4}".format(args.K,args.N,loaded_step,args.previous_K,args.previous_N))
-            decoded_bits,out_mask = net.decode(samples,[0,1],None,device)
-            decoded_msg_bits = 1.0 * (decoded_bits > 0)
-            colors = [2*elem[0] + elem[1] for elem in decoded_msg_bits.squeeze().tolist()]
-            plt.figure(figsize = (20,10))
-            scatt = plt.scatter(x, y,c=colors)
-            plt.title(ID + ' at Step {0}'.format(iteration))
-            plt.savefig(previous_save_path + '/'+'decision_boundaries/tsne_at_step_{0}_bit_{1}.png'.format(iteration,focus_on_bit))
-            plt.close()
-            images.append(imageio.imread(previous_save_path + '/'+'decision_boundaries/tsne_at_step_{0}_bit_{1}.png'.format(iteration,focus_on_bit)))
-        imageio.mimsave(previous_save_path + '/'+'decision_boundaries/all_movie_bit_{0}.gif'.format(focus_on_bit), images)
-        return
-    
-    samples = polar.channel(polar_code, snr)
-    
-    samplesNumpy = samples.numpy()
-    #print(decoded_msg_bits[:,focus_on_bit])
-    
-    
-    embedder = TSNE(n_components=2,init='random')
-    X_embedded = embedder.fit_transform(samplesNumpy)
-    
-    x = X_embedded[:,0]
-    y = X_embedded[:,1]
-    
-    num_models = int(args.model_iters/args.model_save_per)
-    model_iters_arr = [ args.model_save_per*elem for elem in list(range(num_models))]
-    model_iters_arr[0] = 10
-    for iteration in tqdm(model_iters_arr):
-        if args.previous_code == 'polar':
-            previous_save_path = './Supervised_Xformer_decoder_Polar_Results/Polar_{0}_{1}/Scheme_{2}/{3}/{4}_depth_{5}'\
-                                        .format(args.previous_K, args.previous_N, args.previous_rate_profile,  args.model, args.n_head,args.n_layers)
-        elif args.previous_code == 'pac':
-            previous_save_path = './Supervised_Xformer_decoder_PAC_Results/Polar_{0}_{1}/Scheme_{2}/{3}/{4}_depth_{5}'\
-                                        .format(args.previous_K, args.previous_N, args.previous_rate_profile,  args.model, args.n_head,args.n_layers)
-        if args.previous_id is not None:
-            previous_save_path = previous_save_path + '/' + args.previous_id
-        else:
-            previous_save_path = previous_save_path #+ '/' + ID
-        if args.run is not None:
-            previous_save_path = previous_save_path + '/' + '{0}'.format(args.run)
-        os.makedirs(previous_save_path+ '/'+'decision_boundaries/', exist_ok=True)
-        checkpoint1 = torch.load(previous_save_path +'/Models/model_{0}.pt'.format(iteration), map_location=lambda storage, loc: storage)
-        #xformer.load_state_dict(torch.load(PATH))
-        loaded_step = checkpoint1['step']
-        net.load_state_dict(checkpoint1['xformer'])
-        print("Loaded Model for {0},{1} loaded at step {2} from previous model {3},{4}".format(args.K,args.N,loaded_step,args.previous_K,args.previous_N))
-        decoded_bits,out_mask = net.decode(samples,info_inds,None,device)
-        decoded_msg_bits = decoded_bits[:, info_inds]
-        colors = decoded_msg_bits[:,focus_on_bit].squeeze().tolist()
-        plt.figure(figsize = (20,10))
-        scatt = plt.scatter(x, y,c=colors)
-        plt.title('Step {0}'.format(iteration))
-        plt.savefig(previous_save_path + '/'+'decision_boundaries/tsne_at_step_{0}_bit_{1}.png'.format(iteration,focus_on_bit))
-        plt.close()
-        images.append(imageio.imread(previous_save_path + '/'+'decision_boundaries/tsne_at_step_{0}_bit_{1}.png'.format(iteration,focus_on_bit)))
-    imageio.mimsave(previous_save_path + '/'+'decision_boundaries/all_movie_bit_{0}.gif'.format(focus_on_bit), images)
-    
+
 if __name__ == '__main__':
     args = get_args()
     if args.anomaly:
@@ -839,42 +716,20 @@ if __name__ == '__main__':
 
     #___________________Model Definition___________________________________________________#
     
-    gen_mat = torch.eye(args.N,args.N)
-    #if args.code == 'polar':
-    gen_mat = PolarCode(n, args.N, args).get_generator_matrix()
-    gen_mat.to(device)
-    args.mat = gen_mat
     if args.model == 'gpt':
         xformer = XFormerEndToEndGPT(args)
     elif args.model == 'decoder':
         xformer = XFormerEndToEndDecoder(args)
-    elif args.model == 'encoder' or args.model == 'denoiser':
+    elif args.model == 'encoder':
         xformer = XFormerEndToEndEncoder(args)
-    elif args.model == 'simple':
-        xformer = simpleNet(args)
     elif args.model == 'conv':
         xformer = convNet(args)
-    elif args.model == 'bigConv':
-        xformer = bigConvNet(args)
-    elif args.model == 'small':
-        xformer = smallNet(args)
-    elif args.model == 'multConv':
-        gen_mat = torch.eye(args.N,args.N)
-        #if args.code == 'polar':
-        gen_mat = PolarCode(n, args.K, args).get_generator_matrix(custom_info_positions=info_inds)
-        gen_mat.to(device)
-        xformer = multConvNet(args,gen_mat)
     elif args.model == 'rnnAttn':
         xformer = rnnAttn(args)
-    elif args.model == 'bitConv':
-        xformer = bitConvNet(args)
-    #device = 'cpu'
-    
-    
     
 
 
-    if not args.test:
+    if not args.test:  # train the model
         os.makedirs(results_save_path, exist_ok=True)
         os.makedirs(results_save_path +'/Models', exist_ok=True)
         os.makedirs(final_save_path , exist_ok=True)
@@ -1448,22 +1303,8 @@ if __name__ == '__main__':
                 plt.ylim(top=0.6)
                 plt.title("Hardest to easiest order : {0}".format(np.argsort(np.argsort(info_inds1))))
                 plt.savefig(results_save_path +'/z_progressive_bitwise_{0}.pdf'.format(i))
-                
-                
                 plt.close()
-            
-            
-            
             sys.exit()
-            
-        # if args.scatter_plot:
-        #     msgs = torch.ones((4,args.K)).float()
-        #     msgs[1][-1] = -1.
-        #     msgs[2][-2] = -1.
-        #     msgs[3][-1] = -1.
-        #     msgs[3][-2] = -1.
-            
-        #     polar_code = polarTarget.encode_plotkin(msgs)
         
         times = []
         results_load_path = final_save_path
@@ -1616,11 +1457,7 @@ if __name__ == '__main__':
                 blers_fano_test = blers_fano_temp
                 snr_range_fano = snr_range
     
-            # if args.run_fano:
-            #     if not os.path.exists(fano_path):
-            #         os.makedirs('./data/pac/fano/Scheme_{}'.format(args.rate_profile), exist_ok=True)
-            #         print("Saving fano error rates at: {}".format(fano_path))
-            #         pickle.dump([snr_range, bers_fano_test, blers_fano_test], open(fano_path, 'wb'))
+            
             try:
                 print(bers_bitwise_Xformer_test)
             except:
