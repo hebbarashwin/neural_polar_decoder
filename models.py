@@ -33,9 +33,18 @@ from collections import namedtuple
 import sys
 import csv
 
+MODEL = 'gpt'
+
+def get_pad_mask(seq, pad_idx):
+    return (seq != pad_idx).unsqueeze(-2)
 
 
-
+def get_subsequent_mask(seq):
+    ''' For masking out the subsequent info. '''
+    sz_b, len_s = seq.size()
+    subsequent_mask = (1 - torch.triu(
+        torch.ones((1, len_s, len_s), device=seq.device), diagonal=1)).bool()
+    return subsequent_mask
 
 class ScaledDotProductAttention(nn.Module):
     ''' Scaled Dot-Product Attention '''
@@ -49,11 +58,11 @@ class ScaledDotProductAttention(nn.Module):
 
         attn = torch.matmul(q / self.temperature, k.transpose(2, 3))
         if mask is not None:
-            # if args.model == 'gpt':
-            #     attn = attn.masked_fill(mask == 0, -1e9)
-            # else:
-            mask=mask.unsqueeze(1)
-            attn = attn.masked_fill(mask == 0, -1e9)
+            if MODEL == 'gpt':
+                attn = attn.masked_fill(mask == 0, -1e9)
+            else:
+                mask=mask.unsqueeze(1)
+                attn = attn.masked_fill(mask == 0, -1e9)
 
         attn = self.dropout(F.softmax(attn, dim=-1))
         output = torch.matmul(attn, v)
@@ -336,6 +345,7 @@ class XFormerEndToEndGPT(nn.Module):
         self.embed_dim = config.embed_dim
         self.block_len = config.max_len
         self.trg_pad_idx = 2
+        MODEL = config.model
         self.start_embed_layer = nn.Sequential(
             nn.Linear(config.N,self.embed_dim),
             nn.GELU(),
@@ -657,6 +667,7 @@ class XFormerEndToEndEncoder(nn.Module):
         self.embed_dim = config.embed_dim
         self.block_len = config.max_len
         self.Encoder = XFormerEncoder(config)
+        MODEL = config.model
         self.Lin_Decoder = nn.Linear(config.embed_dim,1)
 
     def forward(self,noisy_enc,mask,trg_seq,device):
