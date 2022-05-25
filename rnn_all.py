@@ -1332,7 +1332,7 @@ if __name__ == '__main__':
         if not args.fresh:
             os.makedirs(results_save_path)
             os.makedirs(results_save_path +'/Models')
-            print("Save path already exists! Forgot --test? Else, use --fresh flag")
+            # print("Save path already exists! Forgot --test? Else, use --fresh flag")
         else:
             os.makedirs(results_save_path, exist_ok=True)
             os.makedirs(results_save_path +'/Models', exist_ok=True)
