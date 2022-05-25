@@ -749,7 +749,7 @@ def test_full_data(net, code, snr_range, Test_Data_Generator, run_fano = False, 
         pac_code = code.encode(msg_bits)
 
         for snr_ind, snr in enumerate(snr_range):
-            noisy_code = code.channel(pac_code, snr, args.noise_type, args.vv, args.radar_power, args.radar_prob)
+            noisy_code = code.channel(pac_code, snr)#, args.noise_type, args.vv, args.radar_power, args.radar_prob)
 
             if args.are_we_doing_ML:
 
@@ -975,7 +975,7 @@ def test_model(net, code, snr, bitwise = False, tf = False, data = None):
     else:
         msg_bits = 1 - 2 * (torch.rand(args.test_batch_size, code.K, device=device) < 0.5).float()
         encoded = code.encode(msg_bits)
-        noisy_code = code.channel(encoded, snr, args.noise_type, args.vv, args.radar_power, args.radar_prob)
+        noisy_code = code.channel(encoded, snr)#, args.noise_type, args.vv, args.radar_power, args.radar_prob)
     gt = torch.ones(msg_bits.shape[0], code.N, device = msg_bits.device)
     gt[:, code.info_inds] = msg_bits
 
@@ -1330,9 +1330,9 @@ if __name__ == '__main__':
 
     if not args.test:
         if not args.fresh:
-            os.makedirs(results_save_path)
-            os.makedirs(results_save_path +'/Models')
-            # print("Save path already exists! Forgot --test? Else, use --fresh flag")
+            os.makedirs(results_save_path, exist_ok=True)
+            os.makedirs(results_save_path +'/Models', exist_ok=True)
+            print("Save path already exists! Forgot --test? Else, use --fresh flag")
         else:
             os.makedirs(results_save_path, exist_ok=True)
             os.makedirs(results_save_path +'/Models', exist_ok=True)
@@ -1395,7 +1395,7 @@ if __name__ == '__main__':
                 gt[:, code.info_inds] = msg_bits
 
                 encoded = code.encode(msg_bits)
-                corrupted_codewords = code.channel(encoded, train_snr, args.noise_type, args.vv, args.radar_power, args.radar_prob)
+                corrupted_codewords = code.channel(encoded, train_snr)#, args.noise_type, args.vv, args.radar_power, args.radar_prob)
                 teacher_forcing_ratio = args.tfr_min + (args.tfr_max - args.tfr_min) * math.exp(-1 * (i_step - args.teacher_steps)/args.tfr_decay) if i_step > args.teacher_steps else args.tfr_max
                 decoded_vhat = decoder.decode(net, True, corrupted_codewords, gt, teacher_forcing_ratio)
                 decoded_msg_bits = decoded_vhat[:, code.info_inds]
