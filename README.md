@@ -8,4 +8,4 @@ The bash files `run_crisp.sh` trains using the best curricula and GRUs. By defau
 
 ## For running alternate models 
 
-The bash files `run_alt.sh` trains using the best curricula and CNNs. Other models can be trained by changing the `--model` option. By default we use the hyperparameters that gave us decent performance for a reasonable training time. They may be changed inside the file.
+The bash files `run_alt.sh` trains using the best curricula and CNNs. Other models can be trained by changing the `--model` option (can choose between `conv`(CNNs), `gpt`(GPT), `encoder`(BERT)). By default we use the hyperparameters that gave us decent performance for a reasonable training time. They may be changed inside the file. 
