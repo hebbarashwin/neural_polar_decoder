@@ -9,8 +9,6 @@ import argparse
 import time
 
 from polar import PolarCode
-from learn_frozen import LearnFrozen
-# from main import run_polar , run_polar_map
 from utils import errors_ber, errors_bler, moving_average, get_msg_bits_batch, snr_db2sigma, log_sum_exp, log_sum_avoid_zero_NaN, Clamp, STESign, STEQuantize, new_log_sum, new_log_sum_avoid_zero_NaN, min_sum_log_sum_exp
 
 def get_args():
@@ -170,7 +168,7 @@ class PAC():
         else:
             B = custom_info_positions.copy()
             B.sort()
-            
+
         u = torch.ones((msg_bits.shape[0], self.N), dtype=torch.float, device=msg_bits.device)
         u[:,B] = msg_bits
 
@@ -247,93 +245,7 @@ class PAC():
         decoded_bits = partial_sums[:,0].clone()
         llrs, partial_sums, decoded_bits = self.partial_decode(llrs, partial_sums, depth, 0, leaf_position, decoded_bits)
         return llrs, decoded_bits
-    #
-    #
-    # def partial_decode(self, llrs, partial_sums, depth, bit_position, leaf_position, decoded_bits=None):
-    #     # Function to call recursively, for partial SC decoder.
-    #     # We are assuming that u_0, u_1, .... , u_{leaf_position -1} bits are known.
-    #     # Partial sums computes the sums got through Plotkin encoding operations of known bits, to avoid recomputation.
-    #     # this function is implemented for rate 1 (not accounting for frozen bits in polar SC decoding)
-    #
-    #     # print("DEPTH = {}, bit_position = {}".format(depth, bit_position))
-    #     half_index = 2 ** (depth - 1)
-    #     leaf_position_at_depth = leaf_position // 2**(depth-1) # will tell us whether left_child or right_child
-    #
-    #     # n = 2 tree case
-    #     if depth == 1:
-    #         # Left child
-    #         left_bit_position = 2*bit_position
-    #         if leaf_position_at_depth > left_bit_position:
-    #             u_hat = partial_sums[:, depth-1, left_bit_position:left_bit_position+1]
-    #         elif leaf_position_at_depth == left_bit_position:
-    #             if False: #left_bit_position in self.frozen_positions: #NEED TO CHANGE
-    #                 # If frozen decoded bit is 0
-    #                 u_hat = torch.ones_like(llrs[:, :half_index], dtype=torch.float)
-    #             else:
-    #                 Lu = min_sum_log_sum_exp(llrs[:, depth, left_bit_position*half_index:(left_bit_position+1)*half_index].clone(), llrs[:,depth, (left_bit_position+1)*half_index:(left_bit_position+2)*half_index].clone()).sum(dim=1, keepdim=True)
-    #
-    #                 llrs[:, depth-1, left_bit_position*half_index:(left_bit_position+1)*half_index] = Lu
-    #                 if self.args.hard_decision:
-    #                     u_hat = torch.sign(Lu)
-    #                 else:
-    #                     if self.args.soft_sign == 'tanh':
-    #                         u_hat = torch.tanh(Lu/2)
-    #                     elif self.args.soft_sign == 'STE':
-    #                         u_hat = self.ste_sign(Lu)
-    #
-    #                 decoded_bits[:, left_bit_position] = u_hat.squeeze(1)
-    #
-    #                 return llrs, partial_sums, decoded_bits
-    #
-    #         # Right child
-    #         right_bit_position = 2*bit_position + 1
-    #         if leaf_position_at_depth > right_bit_position:
-    #             pass
-    #         elif leaf_position_at_depth == right_bit_position:
-    #             if False:#right_bit_position in self.frozen_positions: #NEED TO CHANGE
-    #                 # If frozen decoded bit is 0
-    #                 v_hat = torch.ones_like(llrs[:, :half_index], dtype = torch.float)
-    #             else:
-    #                 Lv = u_hat.clone() * llrs[:, depth, left_bit_position*half_index:(left_bit_position+1)*half_index].clone() + llrs[:,depth, (left_bit_position+1)*half_index:(left_bit_position+2)*half_index].clone()
-    #                 llrs[:, depth-1, right_bit_position*half_index:(right_bit_position+1)*half_index] = Lv
-    #                 if self.args.hard_decision:
-    #                     v_hat = torch.sign(Lv)
-    #                 else:
-    #                     if self.args.soft_sign == 'tanh':
-    #                         v_hat = torch.tanh(Lv/2)
-    #                     elif self.args.soft_sign == 'STE':
-    #                         v_hat = self.ste_sign(Lv/2)
-    #                 decoded_bits[:, right_bit_position] = v_hat.squeeze(1)
-    #                 return llrs, partial_sums, decoded_bits
-    #
-    #
-    #     # General case
-    #     else:
-    #         # LEFT CHILD
-    #         # Find likelihood of (u xor v) xor (v) = u
-    #         # Lu = log_sum_avoid_zero_NaN(torch.cat([llrs[:, :half_index].unsqueeze(2), llrs[:, half_index:].unsqueeze(2)], dim=2).permute(0, 2, 1))
-    #
-    #         left_bit_position = 2*bit_position
-    #         if leaf_position_at_depth > left_bit_position:
-    #             Lu = llrs[:, depth-1, left_bit_position*half_index:(left_bit_position+1)*half_index]
-    #             u_hat = partial_sums[:, depth-1, left_bit_position*half_index:(left_bit_position+1)*half_index]
-    #         else:
-    #             Lu = min_sum_log_sum_exp(llrs[:, depth, left_bit_position*half_index:(left_bit_position+1)*half_index].clone(), llrs[:,depth, (left_bit_position+1)*half_index:(left_bit_position+2)*half_index].clone())
-    #
-    #             llrs[:, depth-1, left_bit_position*half_index:(left_bit_position+1)*half_index] = Lu
-    #             llrs, partial_sums, decoded_bits = self.partial_decode(llrs, partial_sums, depth-1, left_bit_position, leaf_position, decoded_bits)
-    #
-    #             return llrs, partial_sums, decoded_bits
-    #
-    #         # RIGHT CHILD
-    #         right_bit_position = 2*bit_position + 1
-    #
-    #         Lv = u_hat.clone() * llrs[:, depth, left_bit_position*half_index:(left_bit_position+1)*half_index].clone() + llrs[:,depth, (left_bit_position+1)*half_index:(left_bit_position+2)*half_index].clone()
-    #         llrs[:, depth-1, right_bit_position*half_index:(right_bit_position+1)*half_index] = Lv
-    #         llrs, partial_sums, decoded_bits = self.partial_decode(llrs, partial_sums, depth-1, right_bit_position, leaf_position, decoded_bits)
-    #
-    #         return llrs, partial_sums, decoded_bits
-    #
+
     def updatePartialSums(self, leaf_position, decoded_bits, partial_sums):
 
         u = decoded_bits.clone()
@@ -937,7 +849,6 @@ if __name__ == '__main__':
     g = args.g#91
     M = int(np.floor(np.log2(g))) + 1
     pac = PAC(args, args.N, args.K, g)
-    polar = LearnFrozen(pac.n, pac.N, args)
 
     # msg_bits = np.random.randint(0,2,(args.batch_size, args.K))
     blers = {}
