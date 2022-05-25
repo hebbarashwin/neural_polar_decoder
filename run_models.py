@@ -45,7 +45,7 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 def get_args():
-    parser = argparse.ArgumentParser(description='Polar code - xformer decoder')
+    parser = argparse.ArgumentParser(description='Polar/PAC code - decoder')
 
     parser.add_argument('--id', type=str, default=None, help='ID: optional, to run multiple runs of same hyperparameters') #Will make a folder like init_932 , etc.
     
@@ -113,15 +113,15 @@ def get_args():
     
     parser.add_argument('--cosine', dest = 'cosine', default=False, action='store_true', help='cosine annealing')
     
-    parser.add_argument('--num_restarts',type=int, default=200, help='number of restarts while cosine annealing')
+    parser.add_argument('--num_restarts',type=int, default=1, help='number of restarts while cosine annealing')
     
     parser.add_argument('--print_freq', type=int, default=1000, help='validation every x steps')
 
     parser.add_argument('--activation', type=str, default='selu', choices=['selu', 'relu', 'elu', 'tanh', 'sigmoid'], help='activation function')
     
-    parser.add_argument('--prog_mode', type=str, default='e2h', choices=['e2h', 'h2e', 'r2l', 'l2r','random'], help='hard 2 easy progressive training, etc.')
+    parser.add_argument('--curriculum', type=str, default='c2n', choices=['c2n', 'n2c', 'r2l', 'l2r','random'], help='name of curriculum being followed')
     
-    parser.add_argument('--target_K', type=int, default=16, help='target K while training progressively')
+    parser.add_argument('--target_K', type=int, default=16, help='target K while training a curriculum')
 
     # TRAINING parameters
     parser.add_argument('--model', type=str, default='gpt', choices=['simple','conv','encoder', 'decoder', 'gpt','denoiser','bigConv','small','multConv','rnnAttn','bitConv'], help='model to be trained')
@@ -657,7 +657,7 @@ if __name__ == '__main__':
             polar = PAC(args, args.N, args.K, args.g)
             polarTarget = PAC(args, args.N, args.target_K, args.g)
     
-    if args.prog_mode == 'e2h':
+    if args.curriculum == 'c2n':
         if args.code == 'polar':
             info_inds = polar.info_positions
             frozen_inds = polar.frozen_positions
@@ -665,7 +665,7 @@ if __name__ == '__main__':
             frozen_levels = (polar.rate_profiler(-torch.ones(1, args.K), scheme = args.rate_profile) == 1.)[0].numpy()
             info_inds = polar.B
             frozen_inds = np.array(list(set(np.arange(args.N))^set(polar.B)))
-    elif args.prog_mode == 'h2e':
+    elif args.curriculum == 'n2c':
         if args.code == 'polar':
             info_inds = polarTarget.unsorted_info_positions[:args.K].copy()
             frozen_inds = polarTarget.frozen_positions
@@ -673,7 +673,7 @@ if __name__ == '__main__':
             frozen_levels = (polar.rate_profiler(-torch.ones(1, args.K), scheme = args.rate_profile) == 1.)[0].numpy()
             info_inds = polarTarget.unsorted_info_positions[:args.K].copy()
             frozen_inds = np.array(list(set(np.arange(args.N))^set(polar.B)))
-    elif args.prog_mode == 'l2r':
+    elif args.curriculum == 'l2r':
         if args.code == 'polar':
             info_inds = polarTarget.info_positions[:args.K].copy()
             frozen_inds = polarTarget.frozen_positions
@@ -681,7 +681,7 @@ if __name__ == '__main__':
             frozen_levels = (polar.rate_profiler(-torch.ones(1, args.K), scheme = args.rate_profile) == 1.)[0].numpy()
             info_inds = polarTarget.B[:args.K].copy()
             frozen_inds = np.array(list(set(np.arange(args.N))^set(polar.B)))
-    elif args.prog_mode == 'r2l':
+    elif args.curriculum == 'r2l':
         if args.code == 'polar':
             info_inds = polarTarget.info_positions[-args.K:].copy()
             frozen_inds = polarTarget.frozen_positions
@@ -689,7 +689,7 @@ if __name__ == '__main__':
             frozen_levels = (polar.rate_profiler(-torch.ones(1, args.K), scheme = args.rate_profile) == 1.)[0].numpy()
             info_inds = polarTarget.B[-args.K:].copy()
             frozen_inds = np.array(list(set(np.arange(args.N))^set(polar.B)))
-    elif args.prog_mode == 'random':
+    elif args.curriculum == 'random':
         if args.code == 'polar':
             random_info = polarTarget.info_positions.copy()
             random.Random(42).shuffle(random_info)
@@ -710,7 +710,7 @@ if __name__ == '__main__':
     print("Target Info positions : {}".format(target_info_inds))
     print("Frozen positions : {}".format(frozen_inds))
     print("Code : {0} ".format(args.code))
-    print("Type of training : {0}".format(args.prog_mode))
+    print("Type of training : {0}".format(args.curriculum))
     print("Rate Profile : {0}".format(args.rate_profile))
     print("Validation SNR : {0}".format(args.validation_snr))
 
@@ -1231,15 +1231,15 @@ if __name__ == '__main__':
             plt.savefig(results_save_path +'/valid_progressive_bitwise_log.pdf')
             plt.close()
             
-            if args.id == 'h2e' or args.id == 'e2h' or args.id == None:
+            if args.id == 'n2c' or args.id == 'c2n' or args.id == None:
                 pass
             else:
                 sys.exit()
             
             for i in range(len(bitwise_ber)):
                 plt.figure(figsize = (20,10))
-                bitwise_ber_h2e = [] 
-                bitwise_ber_e2h = [] 
+                bitwise_ber_n2c = [] 
+                bitwise_ber_c2n = [] 
                 bitwise_ber_scr = [] 
                 net_iters = [0]
                 k = args.K#+1
@@ -1265,18 +1265,18 @@ if __name__ == '__main__':
                         print("Did not find model trained from scratch")
                     try:
                         rows = []
-                        with open(os.path.join(results_save_path + '/h2e', 'values_validation.csv')) as f:
+                        with open(os.path.join(results_save_path + '/n2c', 'values_validation.csv')) as f:
                             csvRead = csv.reader(f)
                             for row in csvRead:
                                 rows.append(list(map(float,row)))
-                        bitwise_ber_h2e = bitwise_ber_h2e + rows[i+3]
+                        bitwise_ber_n2c = bitwise_ber_n2c + rows[i+3]
                         rows = []
-                        with open(os.path.join(results_save_path + '/e2h', 'values_validation.csv')) as f:
+                        with open(os.path.join(results_save_path + '/c2n', 'values_validation.csv')) as f:
                             csvRead = csv.reader(f)
                             for row in csvRead:
                                 rows.append(list(map(float,row)))
                     except:
-                        print("Did not find h2e and e2h")
+                        print("Did not find n2c and c2n")
                         rows = []
                         with open(os.path.join(results_save_path, 'values_validation.csv')) as f:
                             csvRead = csv.reader(f)
@@ -1284,14 +1284,14 @@ if __name__ == '__main__':
                                 rows.append(list(map(float,row)))
                             
                     
-                    bitwise_ber_e2h = bitwise_ber_e2h + rows[i+3]
+                    bitwise_ber_c2n = bitwise_ber_c2n + rows[i+3]
                     iterations = [it+net_iters[-1]+1 for it in rows[0]]
                     net_iters = net_iters + iterations
                     plt.axvline(x = net_iters[-1], color = 'grey', linestyle='dashed')
                     k += 1
                 net_iters = net_iters[1:]#net_iters[101:]
-                plt.semilogy(net_iters,bitwise_ber_h2e, label='Bit {0} H2E'.format(i))
-                plt.semilogy(net_iters,bitwise_ber_e2h, label='Bit {0} E2H'.format(i))
+                plt.semilogy(net_iters,bitwise_ber_n2c, label='Bit {0} n2c'.format(i))
+                plt.semilogy(net_iters,bitwise_ber_c2n, label='Bit {0} c2n'.format(i))
                 if len(ber_scratch) < len(net_iters):
                     plt.semilogy(net_iters[:len(bitwise_ber_scr)],bitwise_ber_scr, label='Bit {0} scr'.format(i))
                 else:
