@@ -12,7 +12,7 @@ The bash files `run_alt.sh` trains using the best curricula and CNNs. Other mode
 
 ## Python requirements
 
-We mention the versions of some key python packages used in the code.
-
-`numpy=1.22.3`
-`torch=1.7.1`
+The required Python packages can be installed by using:
+```
+pip install -r requirements.txt
+```
