@@ -178,6 +178,10 @@ def get_args():
 
     parser.add_argument('--test_load_path', type=str, default=None, help='load test model given path')
 
+    parser.add_argument('--train_list_size', type=int, default=None)#, choices=[100, 20000, 40000], help='number of blocks')
+
+    parser.add_argument('--training', type=str, choices=['seq', 'list'], default='seq')
+
     parser.add_argument('--list_size', type=int, default=None)#, choices=[100, 20000, 40000], help='number of blocks')
 
     parser.add_argument('--run_fano', dest = 'run_fano', default=False, action='store_true', help='run fano decoding')
@@ -487,9 +491,10 @@ class RNN_decoder:
                             out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size - self.N)], 2), hidden)
                         else:
                             if not args.no_detach:
-                                out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size - self.N).detach().clone()], 2), hidden)
+                                inn = torch.cat([Fy.unsqueeze(1), onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size - self.N).detach().clone()], 2)
+                                out, hidden = net(inn, hidden)
                             else:
-                                out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size - self.N).clone()], 2), hidden)
+                                out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size - self.N).clone()], 2) , hidden)
                         if ii in self.info_inds:
                             decoded[:, ii] = out.squeeze()
                 elif self.decoding_type == 'y_h0_out':
@@ -565,19 +570,25 @@ class RNN_decoder:
         sorted_inds, _ = torch.sort(inds, 0)
         batch_size = decoded_list.shape[1]
 
+        # This is the SC-L code
         # llr_array_list = torch.gather(llr_array_list, 0, sorted_inds.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, llr_array_list.shape[2], llr_array_list.shape[3]))
         # partial_llrs_list = torch.gather(partial_llrs_list, 0, sorted_inds.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, partial_llrs_list.shape[2], partial_llrs_list.shape[3]))
         # metric_list = torch.gather(metric_list, 0, sorted_inds)
         # u_hat_list = torch.gather(u_hat_list, 0, sorted_inds.unsqueeze(-1).repeat(1, 1, u_hat_list.shape[2]))
-        hshape = hidden_list.shape
-        h_list = hidden_list.permute(0, 2, 1, 3)
-        hidden_list = h_list[sorted_inds, torch.arange(batch_size)].permute(0, 2, 1, 3)
+
+        # Similar for RNN list.
+        # hidden_list is of shape (list_size, num_layers*bidirectional = 2, batch_size, hidden_dim)
+        # Based on inds, I have to choose different indices for each sample in the batch - this below indexing does that.
+        hidden_list1 = hidden_list[sorted_inds, :, torch.arange(batch_size)].permute(0, 2, 1, 3)
+        # Issue here : Since I am selecting a different hidden state for every sample - this is like a in-place operation on hidden.
+        # So if I don't clone the input to RNN, I get the in-place modification error.
+        # But if I pass hidden.clone(), gradients don;t flow back through time.
 
         metric_list = metric_list[sorted_inds, torch.arange(batch_size)]
         decoded_list = decoded_list[sorted_inds, torch.arange(batch_size)]
-        return hidden_list.contiguous(), decoded_list, metric_list
+        return hidden_list1.contiguous(), decoded_list, metric_list
 
-    def list_decode(self, net, y, code, L = 1):
+    def list_decode(self, net, y, code, L = 1, msg_bits = None):
 
         if not self.onehot:
             onehot_fn = lambda x:x
@@ -586,8 +597,9 @@ class RNN_decoder:
         loss_inds = self.info_inds
         batch_size = y.shape[0]
 
-        net.eval()
-        with torch.no_grad():
+        # net.eval()
+        # with torch.no_grad():
+        if True:
             decoded = torch.ones(y.shape[0], self.N, device = y.device)
             if self.decoding_type == 'y_h0':
                 hidden = net.get_h0(y)
@@ -595,7 +607,7 @@ class RNN_decoder:
 
                     if ii in loss_inds:
                         decoded[:, ii] = out.squeeze().sign()
-            elif self.decoding_type == 'y_input':
+            elif self.decoding_type == 'y_input': # default
                 if net.y_depth == 0:
                     Fy = y
                 else:
@@ -607,16 +619,16 @@ class RNN_decoder:
 
             hidden = torch.zeros(net.num_rnn_layers, y.shape[0], net.feature_size, device = y.device)
             store_device = y.device #torch.device('cpu')
-            hidden_list = hidden.unsqueeze(0).cpu()
-            decoded_list = decoded.unsqueeze(0).cpu()
-            metric_list = torch.zeros(1, y.shape[0]).cpu()
+            hidden_list = hidden.unsqueeze(0)
+            decoded_list = decoded.unsqueeze(0)
+            metric_list = torch.zeros(1, y.shape[0], device = store_device)
 
             for ii in range(self.N): # don't assume first bit is always frozen
                 list_size = hidden_list.shape[0]
-                if ii in self.info_inds:
-                    metric_list = torch.vstack([metric_list, metric_list])
-                    decoded_list = torch.vstack([decoded_list, decoded_list])
-                    hidden_list = torch.vstack([hidden_list, hidden_list])
+                # if ii in self.info_inds:
+                #     metric_list = torch.vstack([metric_list, metric_list])
+                #     decoded_list = torch.vstack([decoded_list, decoded_list])
+                #     hidden_list = torch.vstack([hidden_list, hidden_list])
 
                 for list_index in range(list_size):
 
@@ -627,27 +639,31 @@ class RNN_decoder:
                             out, hidden = net(onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size), hidden)
                     elif self.decoding_type == 'y_input':
                         if ii == 0:
-                            out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size - self.N)], 2), hidden_list[list_index].to(y.device))
+                            out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size - self.N)], 2), hidden_list[list_index].clone().to(y.device))
                         else:
-                            out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(decoded_list[list_index, :, ii-1].to(y.device).sign()).view(-1, 1, net.input_size - self.N).detach().clone()], 2), hidden_list[list_index].to(y.device))
+                            inn = torch.cat([Fy.unsqueeze(1), onehot_fn(decoded_list[list_index, :, ii-1].sign()).view(-1, 1, net.input_size - self.N).clone()], 2)
+                            # ISSUE : If I clone the hidden state in the list, the computational graph is not counted, gradients don't flow back through time.
+                            hidden = hidden_list[list_index].clone()
+                            out, hidden = net(inn, hidden)
                     elif self.decoding_type == 'y_h0_out':
                         if ii == 0:
                             out, hidden = net(onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size),  hidden, Fy)
                         else:
                             out, hidden = net(onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size), hidden, Fy)
                     if ii in self.info_inds: # not frozen
+                        metric_list = torch.vstack([metric_list, metric_list])
+                        decoded_list = torch.vstack([decoded_list, decoded_list])
+                        hidden_list = torch.vstack([hidden_list, hidden_list])
+                    
                         decoded_list[list_index, :, ii] = out.squeeze().sign()
                         decoded_list[list_size+list_index, :, ii] = -1*out.squeeze().sign()
 
-                        metric = torch.abs(out).cpu()
+                        metric = torch.abs(out)
                         metric_list[list_size+list_index, :] += metric.squeeze()
 
                         hidden_list[list_index] = hidden
                         hidden_list[list_size+list_index] = hidden
                     else: # frozen
-                        # decoded_list[list_index, :, ii] is already ones
-                        # metric = torch.abs(out.cpu())*(out.sign().cpu() != 1*torch.ones_like(out).cpu()).float().cpu()
-                        # metric_list[list_index, :] += metric.squeeze()
                         hidden_list[list_index] = hidden
                 if ii in self.info_inds:
                     if hidden_list.shape[0] > L:
@@ -655,9 +671,13 @@ class RNN_decoder:
 
 
             list_size = hidden_list.shape[0]
-            decoded = decoded_list[:, :, self.info_inds].detach().cpu()
+            decoded = decoded_list[:, :, code.info_inds]
             codeword_list = code.encode_plotkin(decoded.reshape(-1, code.K)).reshape(list_size, batch_size, self.N)
-            inds = ((codeword_list - y.cpu().unsqueeze(0))**2).sum(2).argmin(0)
+            if msg_bits is None:
+                ML_target = y
+            else:
+                ML_target = code.encode_plotkin(msg_bits)
+            inds = ((codeword_list - y.unsqueeze(0))**2).sum(2).argmin(0)
             # get ML decision for each sample.
             decoded = decoded[inds, torch.arange(batch_size)]
 
@@ -844,7 +864,7 @@ def polar_RNN_full_test(net, polar, snr_range, Test_Data_Generator, run_ML=False
         gt = torch.ones(msg_bits.shape[0], args.N, device = msg_bits.device)
         gt[:, code.info_inds] = msg_bits
         for snr_ind, snr in enumerate(snr_range):
-            noisy_code = polar.channel(polar_code, snr, args.noise_type, args.vv, args.radar_power, args.radar_prob)
+            noisy_code = polar.channel(polar_code, snr)
             noise = noisy_code - polar_code
 
             if args.loss_only is None:
@@ -879,7 +899,7 @@ def polar_RNN_full_test(net, polar, snr_range, Test_Data_Generator, run_ML=False
                 bler_RNN = errors_bler(msg_bits, decoded_RNN_msg_bits.sign()).item()
 
                 if run_RNNL:
-                    decoded_RNNL_msg_bits = decoder.list_decode(net, noisy_code, polar, args.list_size)
+                    decoded_RNNL_msg_bits = decoder.list_decode(net, noisy_code, polar, args.list_size, msg_bits)
 
                     ber_RNNL = errors_ber(msg_bits.cpu(), decoded_RNNL_msg_bits.sign()).item()
                     bler_RNNL = errors_bler(msg_bits.cpu(), decoded_RNNL_msg_bits.sign()).item()
@@ -901,8 +921,6 @@ def polar_RNN_full_test(net, polar, snr_range, Test_Data_Generator, run_ML=False
 
                     decoded = torch.zeros(noisy_code.shape[0], args.K)
                     for jj in range(noisy_code.shape[0]):
-                        #if jj%100 == 0:
-                        #    print(jj)
                         test_msg_bits = msg_bits[jj:jj+1].repeat(all_message_bits.shape[0], 1).cpu()
                         test_msg_bits[:, code.msg_indices] = all_message_bits
 
@@ -967,7 +985,7 @@ def polar_RNN_full_test(net, polar, snr_range, Test_Data_Generator, run_ML=False
 
 
 
-def test_model(net, code, snr, bitwise = False, tf = False, data = None):
+def test_model(net, code, snr, bitwise = False, training_type = 'sf', data = None):
     if data is not None:
         msg_bits, noisy_code = data
         msg_bits, noisy_code = msg_bits.to(device), noisy_code.to(device)
@@ -979,12 +997,15 @@ def test_model(net, code, snr, bitwise = False, tf = False, data = None):
     gt = torch.ones(msg_bits.shape[0], code.N, device = msg_bits.device)
     gt[:, code.info_inds] = msg_bits
 
-    if tf:
-        with torch.no_grad():
+    with torch.no_grad():
+        if training_type == 'tf':
             decoded_bits = decoder.decode(net, True, noisy_code, gt, 1)
-    else:
-        decoded_bits = decoder.decode(net, False, noisy_code)
-    decoded_RNN_msg_bits = decoded_bits[:, code.info_inds].sign()
+            decoded_RNN_msg_bits = decoded_bits[:, code.info_inds].sign()
+        elif training_type == 'sf':
+            decoded_bits = decoder.decode(net, False, noisy_code)
+            decoded_RNN_msg_bits = decoded_bits[:, code.info_inds].sign()
+        elif training_type == 'list':
+            decoded_RNN_msg_bits = decoder.list_decode(net, noisy_code, code, args.train_list_size, msg_bits)
 
     ber_RNN = errors_ber(msg_bits, decoded_RNN_msg_bits.sign()).item()
     bler_RNN = errors_bler(msg_bits, decoded_RNN_msg_bits.sign()).item()
@@ -1397,9 +1418,11 @@ if __name__ == '__main__':
                 encoded = code.encode(msg_bits)
                 corrupted_codewords = code.channel(encoded, train_snr)#, args.noise_type, args.vv, args.radar_power, args.radar_prob)
                 teacher_forcing_ratio = args.tfr_min + (args.tfr_max - args.tfr_min) * math.exp(-1 * (i_step - args.teacher_steps)/args.tfr_decay) if i_step > args.teacher_steps else args.tfr_max
-                decoded_vhat = decoder.decode(net, True, corrupted_codewords, gt, teacher_forcing_ratio)
-                decoded_msg_bits = decoded_vhat[:, code.info_inds]
-
+                if args.training == 'seq':
+                    decoded_vhat = decoder.decode(net, True, corrupted_codewords, gt, teacher_forcing_ratio)
+                    decoded_msg_bits = decoded_vhat[:, code.info_inds]
+                elif args.training == 'list':
+                    decoded_msg_bits = decoder.list_decode(net, corrupted_codewords, code, args.train_list_size, msg_bits)
                 # OLD LOSS: on all bits
                 if args.loss_on_all:
                     loss = loss_fn(decoded_vhat, gt)
@@ -1427,7 +1450,6 @@ if __name__ == '__main__':
                                 loss = loss_fn(decoded_msg_bits[:, code.msg_indices], SC_llrs[:, code.info_inds][:, code.msg_indices])
                         ber = errors_ber(msg_bits[:, code.msg_indices], decoded_msg_bits[:, code.msg_indices].sign()).item()
 
-
                 (loss/args.mult).backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip) # gradient clipping to avoid exploding gradients
 
@@ -1440,10 +1462,10 @@ if __name__ == '__main__':
                 training_losses.append(round(loss.item(),5))
                 training_bers.append(round(ber, 5))
                 if i_step % args.print_freq == 0:
-                    ber_val, bler_val = test_model(net, code, valid_snr)
+                    ber_val, bler_val = test_model(net, code, valid_snr, training_type = 'sf' if args.training == 'seq' else 'list')
                     if args.test_bitwise:
-                        _, _, ber_bitwise = test_model(net, code_N2, valid_snr, bitwise = True, data = std_data)
-                        _, _, ber_bitwise_tf = test_model(net, code_N2, valid_snr, bitwise = True, tf = True, data = std_data)
+                        _, _, ber_bitwise = test_model(net, code_N2, valid_snr, bitwise = True, data = std_data, training_type = 'sf' if args.training == 'seq' else 'list')
+                        _, _, ber_bitwise_tf = test_model(net, code_N2, valid_snr, bitwise = True, data = std_data, training_type = 'tf')
 
                         bitwise_bers.append(ber_bitwise.detach().cpu())
                         bitwise_bers_tf.append(ber_bitwise_tf.detach().cpu())
@@ -1451,14 +1473,14 @@ if __name__ == '__main__':
                     print('[%d/%d] At %d dB, Loss: %.7f, BER: %.7f'
                                 % (i_step, args.num_steps,  valid_snr, loss, ber_val))
                     if args.print_cust:
-                        _, _, ber_bitwise_tf_100 = test_model(net, code, 100, bitwise = True, tf = True)
+                        _, _, ber_bitwise_tf_100 = test_model(net, code, 100, bitwise = True, training_type = 'tf')
                         print('Bitwise 100dB: ', *ber_bitwise_tf_100.cpu().numpy(), '\n')
 
                     if args.test_codes:
                         for test_ii, KK in enumerate(test_bers.keys()):
                             test_code = get_code(args.code, args.rate_profile, args.N, KK, args.g)
-                            ber_val, bler_val = test_model(net, test_code, testing_snrs[test_ii])
-                            ber_val_tf, bler_val_tf = test_model(net, test_code, testing_snrs[test_ii], tf = True)
+                            ber_val, bler_val = test_model(net, test_code, testing_snrs[test_ii], training_type = 'sf' if args.training == 'seq' else 'list')
+                            ber_val_tf, bler_val_tf = test_model(net, test_code, testing_snrs[test_ii], training_type = 'tf')
                             test_bers[KK].append(ber_val)
                             test_blers[KK].append(bler_val)
                             test_bers_tf[KK].append(ber_val_tf)
@@ -1947,3 +1969,100 @@ if __name__ == '__main__':
         plt.savefig(fig_save_path)
 
         plt.close()
+
+
+
+
+    def list_decode(self, net, y, code, L = 1, msg_bits = None):
+
+        if not self.onehot:
+            onehot_fn = lambda x:x
+        else:
+            onehot_fn = get_onehot
+        loss_inds = self.info_inds
+        batch_size = y.shape[0]
+
+        # net.eval()
+        # with torch.no_grad():
+        if True:
+            decoded = torch.ones(y.shape[0], self.N, device = y.device)
+            if self.decoding_type == 'y_h0':
+                hidden = net.get_h0(y)
+                for ii in range(0, self.N): # don't assume first bit is always frozen
+
+                    if ii in loss_inds:
+                        decoded[:, ii] = out.squeeze().sign()
+            elif self.decoding_type == 'y_input': # default
+                if net.y_depth == 0:
+                    Fy = y
+                else:
+                    Fy = net.get_Fy(y)
+
+            elif self.decoding_type == 'y_h0_out':
+                hidden = net.get_h0(y)
+                Fy = hidden.clone().permute(1, 0, 2).contiguous().reshape(-1, 1, net.num_rnn_layers*net.feature_size)
+
+            hidden = torch.zeros(net.num_rnn_layers, y.shape[0], net.feature_size, device = y.device)
+            store_device = y.device #torch.device('cpu')
+            hidden_list = hidden.unsqueeze(0)
+            decoded_list = decoded.unsqueeze(0)
+            metric_list = torch.zeros(1, y.shape[0], device = store_device)
+
+            for ii in range(self.N): # don't assume first bit is always frozen
+                list_size = hidden_list.shape[0]
+                # if ii in self.info_inds:
+                #     metric_list = torch.vstack([metric_list, metric_list])
+                #     decoded_list = torch.vstack([decoded_list, decoded_list])
+                #     hidden_list = torch.vstack([hidden_list, hidden_list])
+
+                for list_index in range(list_size):
+
+                    if self.decoding_type  == 'y_h0':
+                        if ii == 0:
+                            out, hidden = net(onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size),  hidden)
+                        else:
+                            out, hidden = net(onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size), hidden)
+                    elif self.decoding_type == 'y_input':
+                        if ii == 0:
+                            out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size - self.N)], 2), hidden_list[list_index].clone().to(y.device))
+                        else:
+                            inn = torch.cat([Fy.unsqueeze(1), onehot_fn(decoded_list[list_index, :, ii-1].sign()).view(-1, 1, net.input_size - self.N).clone()], 2)
+                            hidden = hidden_list[list_index].clone()
+                            out, hidden = net(inn, hidden)
+                    elif self.decoding_type == 'y_h0_out':
+                        if ii == 0:
+                            out, hidden = net(onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size),  hidden, Fy)
+                        else:
+                            out, hidden = net(onehot_fn(decoded[:, ii-1].sign()).view(-1, 1, net.input_size), hidden, Fy)
+                    if ii in self.info_inds: # not frozen
+                        metric_list = torch.vstack([metric_list, metric_list])
+                        decoded_list = torch.vstack([decoded_list, decoded_list])
+                        hidden_list = torch.vstack([hidden_list, hidden_list])
+                    
+                        decoded_list[list_index, :, ii] = out.squeeze().sign()
+                        decoded_list[list_size+list_index, :, ii] = -1*out.squeeze().sign()
+
+                        metric = torch.abs(out)
+                        metric_list[list_size+list_index, :] += metric.squeeze()
+
+                        hidden_list[list_index] = hidden
+                        hidden_list[list_size+list_index] = hidden
+                    else: # frozen
+                        hidden_list[list_index] = hidden
+                if ii in self.info_inds:
+                    if hidden_list.shape[0] > L:
+                        hidden_list, decoded_list, metric_list = self.pruneLists(hidden_list, decoded_list, metric_list, L)
+
+
+            list_size = hidden_list.shape[0]
+            decoded = decoded_list[:, :, code.info_inds]
+            codeword_list = code.encode_plotkin(decoded.reshape(-1, code.K)).reshape(list_size, batch_size, self.N)
+            if msg_bits is None:
+                ML_target = y
+            else:
+                ML_target = code.encode_plotkin(msg_bits)
+            inds = ((codeword_list - y.unsqueeze(0))**2).sum(2).argmin(0)
+            # get ML decision for each sample.
+            decoded = decoded[inds, torch.arange(batch_size)]
+
+            return decoded
