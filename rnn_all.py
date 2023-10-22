@@ -570,19 +570,18 @@ class RNN_decoder:
         sorted_inds, _ = torch.sort(inds, 0)
         batch_size = decoded_list.shape[1]
 
-        # This is the SC-L code
         # llr_array_list = torch.gather(llr_array_list, 0, sorted_inds.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, llr_array_list.shape[2], llr_array_list.shape[3]))
         # partial_llrs_list = torch.gather(partial_llrs_list, 0, sorted_inds.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, partial_llrs_list.shape[2], partial_llrs_list.shape[3]))
         # metric_list = torch.gather(metric_list, 0, sorted_inds)
         # u_hat_list = torch.gather(u_hat_list, 0, sorted_inds.unsqueeze(-1).repeat(1, 1, u_hat_list.shape[2]))
+        hshape = hidden_list.shape
 
-        # Similar for RNN list.
-        # hidden_list is of shape (list_size, num_layers*bidirectional = 2, batch_size, hidden_dim)
-        # Based on inds, I have to choose different indices for each sample in the batch - this below indexing does that.
+        # h_list = hidden_list.clone().permute(0, 2, 1, 3)
+        # hidden_list1 = h_list[sorted_inds, torch.arange(batch_size)].permute(0, 2, 1, 3)
+
         hidden_list1 = hidden_list[sorted_inds, :, torch.arange(batch_size)].permute(0, 2, 1, 3)
-        # Issue here : Since I am selecting a different hidden state for every sample - this is like a in-place operation on hidden.
-        # So if I don't clone the input to RNN, I get the in-place modification error.
-        # But if I pass hidden.clone(), gradients don;t flow back through time.
+        # hidden_list1 = hidden_list.clone()[0:1]
+
 
         metric_list = metric_list[sorted_inds, torch.arange(batch_size)]
         decoded_list = decoded_list[sorted_inds, torch.arange(batch_size)]
@@ -598,8 +597,8 @@ class RNN_decoder:
         batch_size = y.shape[0]
 
         # net.eval()
-        # with torch.no_grad():
-        if True:
+        with torch.no_grad():
+        # if True:
             decoded = torch.ones(y.shape[0], self.N, device = y.device)
             if self.decoding_type == 'y_h0':
                 hidden = net.get_h0(y)
@@ -642,7 +641,6 @@ class RNN_decoder:
                             out, hidden = net(torch.cat([Fy.unsqueeze(1), onehot_fn(torch.ones(y.shape[0], device = y.device)).view(-1, 1, net.input_size - self.N)], 2), hidden_list[list_index].clone().to(y.device))
                         else:
                             inn = torch.cat([Fy.unsqueeze(1), onehot_fn(decoded_list[list_index, :, ii-1].sign()).view(-1, 1, net.input_size - self.N).clone()], 2)
-                            # ISSUE : If I clone the hidden state in the list, the computational graph is not counted, gradients don't flow back through time.
                             hidden = hidden_list[list_index].clone()
                             out, hidden = net(inn, hidden)
                     elif self.decoding_type == 'y_h0_out':
@@ -1422,7 +1420,12 @@ if __name__ == '__main__':
                     decoded_vhat = decoder.decode(net, True, corrupted_codewords, gt, teacher_forcing_ratio)
                     decoded_msg_bits = decoded_vhat[:, code.info_inds]
                 elif args.training == 'list':
-                    decoded_msg_bits = decoder.list_decode(net, corrupted_codewords, code, args.train_list_size, msg_bits)
+                    decoded_RNN_list_bits = decoder.list_decode(net, corrupted_codewords, code, args.train_list_size, msg_bits)
+                    gt = torch.ones(msg_bits.shape[0], code.N, device = msg_bits.device)
+                    gt[:, code.info_inds] = decoded_RNN_list_bits.clone()
+                    decoded_vhat = decoder.decode(net, True, corrupted_codewords, gt, 1)
+                    decoded_msg_bits = decoded_vhat[:, code.info_inds]
+
                 # OLD LOSS: on all bits
                 if args.loss_on_all:
                     loss = loss_fn(decoded_vhat, gt)
